@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>RSVP Pro - Navigator (1500 WPM)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <style>
+        :root { --accent: #ff3b30; --bg: #121212; --panel: #1e1e1e; }
+        body { background: var(--bg); color: white; font-family: monospace; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        
+        #sidebar {
+            width: 280px; background: var(--panel); border-right: 1px solid #333;
+            display: flex; flex-direction: column; padding: 20px; overflow-y: auto;
+        }
+        #sidebar h3 { font-size: 14px; text-transform: uppercase; color: #888; margin-bottom: 15px; }
+        .nav-item { 
+            padding: 10px; cursor: pointer; border-radius: 4px; font-size: 13px; 
+            margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .nav-item:hover { background: #333; color: var(--accent); }
+
+        #main-content { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+
+        #spritz {
+            background: black; height: 120px; width: 600px;
+            position: relative; border-top: 2px solid #333; border-bottom: 2px solid #333;
+            display: flex; align-items: center; font-size: 48px; overflow: hidden;
+        }
+
+        #spritz::after {
+            content: ''; position: absolute; left: 35%; top: 0; bottom: 0;
+            width: 2px; background: var(--accent); z-index: 10;
+        }
+
+        #target {
+            display: flex; position: absolute; left: 35%;
+            transform: translateX(-0.5ch); white-space: pre;
+        }
+
+        .l { text-align: right; width: 400px; margin-left: -400px; color: #eee; }
+        .p { color: var(--accent); width: 1ch; text-align: center; font-weight: bold; }
+        .r { text-align: left; width: 400px; color: #eee; }
+
+        .controls { margin-top: 30px; text-align: center; }
+        button { padding: 12px 24px; margin: 10px; border: none; background: #28cd41; color: white; font-weight: bold; border-radius: 6px; cursor: pointer; }
+        input[type=range] { width: 400px; cursor: pointer; }
+        #wpm { font-size: 24px; font-weight: bold; margin: 10px; }
+        .extreme-speed { color: var(--accent); } /* Color for > 1000 WPM */
+        #status { font-size: 12px; color: #666; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <h3>Chapters</h3>
+    <div id="toc-list">No PDF loaded</div>
+</div>
+
+<div id="main-content">
+    <input type="file" id="loader" accept=".pdf">
+    
+    <div id="spritz">
+        <div id="target">
+            <span class="l"></span><span class="p"></span><span class="r">READY</span>
+        </div>
+    </div>
+
+    <div class="controls">
+        <input type="range" id="speed" min="200" max="1500" value="400">
+        <div id="wpm">400 WPM</div>
+        <button onclick="toggle()">PLAY / PAUSE</button>
+        <button onclick="reset()" style="background:#444">RESET</button>
+        <p id="status">Upload a PDF to begin</p>
+    </div>
+</div>
+
+<script>
+const pdfjsLib = window['pdfjs-dist/build/pdf'];
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+let words = [];
+let pageMarkers = [];
+let index = 0;
+let timer = null;
+let playing = false;
+
+function getORP(word) {
+    const len = word.length;
+    if (len <= 1) return 0;
+    if (len <= 5) return 1;
+    if (len <= 9) return 2;
+    if (len <= 13) return 3;
+    return 4;
+}
+
+document.getElementById("loader").onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const status = document.getElementById("status");
+    const tocList = document.getElementById("toc-list");
+    status.innerText = "Processing High-Speed Layout...";
+    tocList.innerHTML = "Loading...";
+
+    const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
+    
+    words = [];
+    pageMarkers = [];
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+        pageMarkers[i] = words.length;
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const pageText = content.items.map(s => s.str).join(" ");
+        
+        const pageWords = pageText
+            .replace(/\.{2,}/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .split(" ")
+            .filter(w => /\w/.test(w));
+        
+        words.push(...pageWords);
+    }
+
+    const outline = await pdf.getOutline();
+    tocList.innerHTML = "";
+    
+    if (outline && outline.length > 0) {
+        for (const item of outline) {
+            const div = document.createElement("div");
+            div.className = "nav-item";
+            div.innerText = item.title;
+            
+            div.onclick = async () => {
+                let pageNum = 1;
+                if (typeof item.dest === 'string') {
+                    const dest = await pdf.getDestination(item.dest);
+                    pageNum = await pdf.getPageIndex(dest[0]) + 1;
+                } else if (item.dest && item.dest[0]) {
+                    pageNum = await pdf.getPageIndex(item.dest[0]) + 1;
+                }
+                index = pageMarkers[pageNum] || 0;
+                display(words[index] || "Chapter Start");
+            };
+            tocList.appendChild(div);
+        }
+    } else {
+        tocList.innerHTML = "<div style='color:#555'>No internal TOC found.</div>";
+    }
+
+    status.innerText = `${words.length} words loaded. Ready for 1500 WPM burst.`;
+};
+
+function display(word) {
+    const p = getORP(word);
+    document.getElementById("target").innerHTML = `
+        <span class="l">${word.slice(0, p)}</span>
+        <span class="p">${word[p] || ""}</span>
+        <span class="r">${word.slice(p + 1)}</span>
+    `;
+}
+
+function run() {
+    clearTimeout(timer);
+    if (!playing || index >= words.length) {
+        playing = false;
+        return;
+    }
+
+    const word = words[index];
+    display(word);
+
+    let delay = 60000 / document.getElementById("speed").value;
+    
+    // Adjusted punctuation delays for extreme speeds
+    if (/[.!?]/.test(word)) delay *= 1.6;
+    else if (/,/.test(word)) delay *= 1.2;
+
+    index++;
+    timer = setTimeout(run, delay);
+}
+
+function toggle() {
+    if (!words.length) return;
+    playing = !playing;
+    if (playing) run();
+}
+
+function reset() {
+    clearTimeout(timer);
+    playing = false;
+    index = 0;
+    display("READY");
+}
+
+// Update WPM display and add color warning for high speeds
+document.getElementById("speed").oninput = (e) => {
+    const val = e.target.value;
+    const wpmLabel = document.getElementById("wpm");
+    wpmLabel.innerText = `${val} WPM`;
+    
+    if (val > 1000) {
+        wpmLabel.classList.add("extreme-speed");
+    } else {
+        wpmLabel.classList.remove("extreme-speed");
+    }
+};
+</script>
+</body>
+</html>
